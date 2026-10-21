@@ -37,70 +37,81 @@ export class PlaywrightScraperService implements IScraperService {
 
       const page = await context.newPage();
 
-      // Ocultar señales de automatización
+      // Stealth: ocultar señales de automatización
       await page.addInitScript(() => {
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         (window as unknown as { chrome: unknown }).chrome = { runtime: {} };
       });
 
-      console.log('[PlaywrightScraper] Cargando portal ONPE y resolviendo Cloudflare...');
+      let capturedResponse: OnpeApiResponse | null = null;
 
-      // Paso 1: Cargar la página para obtener la cookie cf_clearance válida
+      // Interceptar la petición que Angular lanza automáticamente al cargar la página
+      // Solo modificamos el idOdp, dejamos que Angular envíe todos sus headers nativos
+      await page.route('**/sigloc-backend/v1/api/convocatoria/lista', async (route) => {
+        try {
+          const raw = route.request().postData();
+          const data = raw ? JSON.parse(raw) : {};
+
+          // Inyectar la ODPE deseada
+          data.idOdp = filter.idOdp;
+          data.pageSize = filter.pageSize || 20;
+
+          console.log(`[PlaywrightScraper] Interceptando petición Angular → inyectando idOdp: ${filter.idOdp}`);
+          await route.continue({ postData: JSON.stringify(data) });
+        } catch {
+          await route.continue();
+        }
+      });
+
+      // Capturar la respuesta de la API
+      page.on('response', async (resp) => {
+        if (resp.url().includes('sigloc-backend/v1/api/convocatoria/lista')) {
+          console.log(`[PlaywrightScraper] Respuesta API recibida: HTTP ${resp.status()}`);
+          try {
+            capturedResponse = await resp.json();
+          } catch {
+            const text = await resp.text().catch(() => '(no text)');
+            console.warn(`[PlaywrightScraper] Respuesta no JSON: ${text.substring(0, 100)}`);
+          }
+        }
+      });
+
+      console.log('[PlaywrightScraper] Cargando portal ONPE (esperando que Angular haga la petición)...');
       await page.goto('https://reclutamiento.onpe.gob.pe/convocatorias', {
         waitUntil: 'domcontentloaded',
         timeout: 30000
       });
 
-      // Paso 2: Esperar a que Cloudflare resuelva su reto JS (máx 15s)
-      await this.waitForCloudflare(page);
-
-      const title = await page.title();
-      console.log(`[PlaywrightScraper] Página cargada: "${title}"`);
-
-      if (title.toLowerCase().includes('moment') || title.toLowerCase().includes('checking')) {
-        console.warn('[PlaywrightScraper] Cloudflare aún no superado. Esperando más...');
-        await page.waitForTimeout(8000);
+      // Esperar hasta 30 segundos a que Angular cargue y haga la petición
+      // Cloudflare puede tomar entre 5-20s en un VPS
+      const startWait = Date.now();
+      const maxWait = 30000;
+      while (!capturedResponse && Date.now() - startWait < maxWait) {
+        await page.waitForTimeout(500);
       }
 
-      // Paso 3: Hacer el fetch directamente desde el contexto del navegador (ya tiene cf_clearance)
-      console.log(`[PlaywrightScraper] Consultando API con idOdp: ${filter.idOdp}...`);
+      const elapsed = Math.round((Date.now() - startWait) / 1000);
 
-      const payload: ConvocatoriaFilterPayload = {
-        ...filter
-      };
-
-      const result = await page.evaluate(async (body: ConvocatoriaFilterPayload) => {
+      if (!capturedResponse) {
+        // Si Angular no disparó la petición en 30s (raro), intentar hacer click en "BUSCAR"
+        console.warn(`[PlaywrightScraper] Angular no disparó petición en ${elapsed}s. Intentando click en BUSCAR...`);
         try {
-          const resp = await fetch('/sigloc-backend/v1/api/convocatoria/lista', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json, text/plain, */*'
-            },
-            credentials: 'include',
-            body: JSON.stringify(body)
-          });
-
-          if (!resp.ok) {
-            return { _error: `HTTP ${resp.status}` };
-          }
-
-          return await resp.json();
-        } catch (e: unknown) {
-          return { _error: e instanceof Error ? e.message : String(e) };
+          await page.locator('button:has-text("BUSCAR")').click({ timeout: 5000 });
+          await page.waitForTimeout(5000);
+        } catch {
+          console.warn('[PlaywrightScraper] No se encontró botón BUSCAR.');
         }
-      }, payload);
-
-      if (result && '_error' in result) {
-        console.error(`[PlaywrightScraper] Error en fetch interno: ${result._error}`);
-        return null;
       }
 
-      const apiResult = result as OnpeApiResponse;
-      const totalRecords = apiResult?.data?.convocatoriasPage?.totalRecords ?? 0;
-      console.log(`[PlaywrightScraper] ✅ Respuesta OK. Convocatorias encontradas: ${totalRecords}`);
+      if (capturedResponse) {
+        const apiData = capturedResponse as OnpeApiResponse;
+        const total = apiData.data?.convocatoriasPage?.totalRecords ?? 0;
+        console.log(`[PlaywrightScraper] ✅ Captura exitosa en ${elapsed}s. Convocatorias: ${total}`);
+      } else {
+        console.warn('[PlaywrightScraper] ⚠️ No se capturó respuesta. Probablemente Cloudflare bloqueó el VPS.');
+      }
 
-      return apiResult;
+      return capturedResponse;
     } catch (error) {
       console.error('[PlaywrightScraper] Error durante el scraping:', error);
       return null;
@@ -109,26 +120,5 @@ export class PlaywrightScraperService implements IScraperService {
         await browser.close().catch(() => {});
       }
     }
-  }
-
-  /**
-   * Espera a que la cookie cf_clearance esté presente,
-   * lo que indica que Cloudflare validó la sesión del navegador.
-   */
-  private async waitForCloudflare(page: import('playwright').Page): Promise<void> {
-    const maxWaitMs = 15000;
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < maxWaitMs) {
-      const cookies = await page.context().cookies();
-      const hasCloudflare = cookies.some(c => c.name === 'cf_clearance');
-      if (hasCloudflare) {
-        console.log('[PlaywrightScraper] ✅ Cloudflare superado (cf_clearance obtenida).');
-        return;
-      }
-      await page.waitForTimeout(500);
-    }
-
-    console.warn('[PlaywrightScraper] ⚠️ cf_clearance no encontrada tras 15s. Continuando de todos modos...');
   }
 }
