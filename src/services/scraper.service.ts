@@ -15,21 +15,32 @@ export class PlaywrightScraperService implements IScraperService {
   public async fetchConvocatorias(filter: ConvocatoriaFilterPayload): Promise<OnpeApiResponse | null> {
     let browser: Browser | null = null;
     try {
-      console.log(`[PlaywrightScraper] Iniciando navegador rápido (headless: ${this.headless})...`);
+      console.log(`[PlaywrightScraper] Iniciando Chromium en VPS (headless: ${this.headless})...`);
       browser = await chromium.launch({
         headless: this.headless,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage', // Esencial en Docker para evitar que Chrome se congele por falta de memoria compartida
+          '--disable-dev-shm-usage',
           '--disable-gpu',
-          '--disable-blink-features=AutomationControlled'
+          '--disable-blink-features=AutomationControlled',
+          '--window-size=1280,720'
         ]
       });
 
-      const page: Page = await browser.newPage({
+      const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
         viewport: { width: 1280, height: 720 },
-        locale: 'es-PE'
+        locale: 'es-PE',
+        timezoneId: 'America/Lima'
+      });
+
+      const page: Page = await context.newPage();
+
+      // Ocultar señales de automatización (stealth)
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        (window as unknown as { chrome: unknown }).chrome = { runtime: {} };
       });
 
       let capturedResponse: OnpeApiResponse | null = null;
@@ -62,17 +73,26 @@ export class PlaywrightScraperService implements IScraperService {
         }
       });
 
-      console.log('[PlaywrightScraper] Navegando a ONPE (carga rápida)...');
-      // domcontentloaded es mucho más rápido y confiable que networkidle en SPAs
+      console.log('[PlaywrightScraper] Navegando a portal ONPE...');
       await page.goto('https://reclutamiento.onpe.gob.pe/convocatorias', {
         waitUntil: 'domcontentloaded',
-        timeout: 25000
+        timeout: 30000
       });
 
-      // Esperar hasta que capturemos la respuesta o máximo 6 segundos
+      // Dar tiempo suficiente para que Cloudflare ejecute su cálculo JS (PoW) y cargue la API
+      console.log('[PlaywrightScraper] Esperando resolución de Cloudflare y carga de la API...');
       const startWait = Date.now();
-      while (!capturedResponse && Date.now() - startWait < 6000) {
+      while (!capturedResponse && Date.now() - startWait < 20000) {
         await page.waitForTimeout(500);
+      }
+
+      const finalTitle = await page.title().catch(() => 'desconocido');
+      console.log(`[PlaywrightScraper] Título de página actual: "${finalTitle}"`);
+
+      if (capturedResponse) {
+        console.log('[PlaywrightScraper] ¡API interceptada exitosamente!');
+      } else {
+        console.warn('[PlaywrightScraper] No se capturó la respuesta a tiempo.');
       }
 
       return capturedResponse;
