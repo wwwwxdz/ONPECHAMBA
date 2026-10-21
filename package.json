@@ -9,6 +9,9 @@
     "dev": "tsx src/index.ts",
     "test:request": "tsx src/test-request.ts"
   },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "dependencies": {
     "dotenv": "^16.4.7",
     "node-cron": "^3.0.3",

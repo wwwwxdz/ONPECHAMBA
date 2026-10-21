@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs_22", "chromium", "xorg.xorgserver"]
+
+[phases.install]
+cmds = ["npm ci --omit=dev"]
+
+[phases.build]
+cmds = ["npx tsc"]
+
+[start]
+cmd = "node dist/index.js"
