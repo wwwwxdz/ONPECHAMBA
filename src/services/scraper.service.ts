@@ -15,7 +15,7 @@ export class PlaywrightScraperService implements IScraperService {
   public async fetchConvocatorias(filter: ConvocatoriaFilterPayload): Promise<OnpeApiResponse | null> {
     let browser: Browser | null = null;
     try {
-      console.log(`[PlaywrightScraper] Iniciando Chromium (headless: ${this.headless})...`);
+      console.log(`[PlaywrightScraper] Iniciando Chromium...`);
       browser = await chromium.launch({
         headless: this.headless,
         args: [
@@ -43,75 +43,99 @@ export class PlaywrightScraperService implements IScraperService {
         (window as unknown as { chrome: unknown }).chrome = { runtime: {} };
       });
 
-      let capturedResponse: OnpeApiResponse | null = null;
-
-      // Interceptar la petición que Angular lanza automáticamente al cargar la página
-      // Solo modificamos el idOdp, dejamos que Angular envíe todos sus headers nativos
+      // Estrategia 1: Interceptar la petición que Angular lanza automáticamente
+      let capturedViaAngular: OnpeApiResponse | null = null;
       await page.route('**/sigloc-backend/v1/api/convocatoria/lista', async (route) => {
         try {
           const raw = route.request().postData();
           const data = raw ? JSON.parse(raw) : {};
-
-          // Inyectar la ODPE deseada
           data.idOdp = filter.idOdp;
           data.pageSize = filter.pageSize || 20;
-
-          console.log(`[PlaywrightScraper] Interceptando petición Angular → inyectando idOdp: ${filter.idOdp}`);
+          console.log(`[PlaywrightScraper] [A] Interceptando petición Angular → idOdp: ${filter.idOdp}`);
           await route.continue({ postData: JSON.stringify(data) });
         } catch {
           await route.continue();
         }
       });
 
-      // Capturar la respuesta de la API
       page.on('response', async (resp) => {
         if (resp.url().includes('sigloc-backend/v1/api/convocatoria/lista')) {
-          console.log(`[PlaywrightScraper] Respuesta API recibida: HTTP ${resp.status()}`);
           try {
-            capturedResponse = await resp.json();
+            if (resp.status() === 200) {
+              capturedViaAngular = await resp.json();
+              console.log(`[PlaywrightScraper] [A] Respuesta Angular capturada: HTTP ${resp.status()}`);
+            } else {
+              console.warn(`[PlaywrightScraper] [A] Respuesta Angular: HTTP ${resp.status()} (ignorada)`);
+            }
           } catch {
-            const text = await resp.text().catch(() => '(no text)');
-            console.warn(`[PlaywrightScraper] Respuesta no JSON: ${text.substring(0, 100)}`);
+            console.warn(`[PlaywrightScraper] [A] Respuesta no JSON.`);
           }
         }
       });
 
-      console.log('[PlaywrightScraper] Cargando portal ONPE (esperando que Angular haga la petición)...');
+      console.log('[PlaywrightScraper] Cargando portal ONPE...');
       await page.goto('https://reclutamiento.onpe.gob.pe/convocatorias', {
         waitUntil: 'domcontentloaded',
         timeout: 30000
       });
 
-      // Esperar hasta 30 segundos a que Angular cargue y haga la petición
-      // Cloudflare puede tomar entre 5-20s en un VPS
-      const startWait = Date.now();
-      const maxWait = 30000;
-      while (!capturedResponse && Date.now() - startWait < maxWait) {
+      // Esperar hasta 20s por la respuesta de Angular
+      const t0 = Date.now();
+      while (!capturedViaAngular && Date.now() - t0 < 20000) {
         await page.waitForTimeout(500);
       }
 
-      const elapsed = Math.round((Date.now() - startWait) / 1000);
+      if (capturedViaAngular) {
+        const total = (capturedViaAngular as OnpeApiResponse).data?.convocatoriasPage?.totalRecords ?? 0;
+        console.log(`[PlaywrightScraper] ✅ [Estrategia A] Captura exitosa. Convocatorias: ${total}`);
+        return capturedViaAngular;
+      }
 
-      if (!capturedResponse) {
-        // Si Angular no disparó la petición en 30s (raro), intentar hacer click en "BUSCAR"
-        console.warn(`[PlaywrightScraper] Angular no disparó petición en ${elapsed}s. Intentando click en BUSCAR...`);
+      // Estrategia 2 (fallback): fetch directo desde el contexto de la página
+      // Funciona incluso cuando Cloudflare muestra la página de reto ("Un momento...")
+      console.warn('[PlaywrightScraper] Angular no respondió en 20s → intentando [Estrategia B] fetch directo...');
+
+      const payload = {
+        tipoConvocatoria: filter.tipoConvocatoria,
+        idRubro: filter.idRubro,
+        idDepartamento: filter.idDepartamento,
+        idLugarEjecucion: filter.idLugarEjecucion,
+        idOdp: filter.idOdp,
+        fechaPublicacion: filter.fechaPublicacion,
+        page: filter.page,
+        pageSize: filter.pageSize || 20,
+        palabraClave: filter.palabraClave,
+        verConcluidas: filter.verConcluidas
+      };
+
+      const resultB = await page.evaluate(async (body) => {
         try {
-          await page.locator('button:has-text("BUSCAR")').click({ timeout: 5000 });
-          await page.waitForTimeout(5000);
-        } catch {
-          console.warn('[PlaywrightScraper] No se encontró botón BUSCAR.');
+          const resp = await fetch('/sigloc-backend/v1/api/convocatoria/lista', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json, text/plain, */*'
+            },
+            credentials: 'include',
+            body: JSON.stringify(body)
+          });
+          if (!resp.ok) return { _error: `HTTP ${resp.status}` };
+          return await resp.json();
+        } catch (e: unknown) {
+          return { _error: e instanceof Error ? e.message : String(e) };
         }
+      }, payload);
+
+      if (resultB && '_error' in (resultB as { _error?: string })) {
+        console.error(`[PlaywrightScraper] [B] Fetch directo falló: ${(resultB as { _error: string })._error}`);
+        return null;
       }
 
-      if (capturedResponse) {
-        const apiData = capturedResponse as OnpeApiResponse;
-        const total = apiData.data?.convocatoriasPage?.totalRecords ?? 0;
-        console.log(`[PlaywrightScraper] ✅ Captura exitosa en ${elapsed}s. Convocatorias: ${total}`);
-      } else {
-        console.warn('[PlaywrightScraper] ⚠️ No se capturó respuesta. Probablemente Cloudflare bloqueó el VPS.');
-      }
+      const apiResultB = resultB as OnpeApiResponse;
+      const totalB = apiResultB.data?.convocatoriasPage?.totalRecords ?? 0;
+      console.log(`[PlaywrightScraper] ✅ [Estrategia B] Fetch directo exitoso. Convocatorias: ${totalB}`);
+      return apiResultB;
 
-      return capturedResponse;
     } catch (error) {
       console.error('[PlaywrightScraper] Error durante el scraping:', error);
       return null;
