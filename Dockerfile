@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright:v1.49.0-noble AS builder
+FROM mcr.microsoft.com/playwright:v1.64.1-noble AS builder
 
 WORKDIR /app
 
@@ -9,11 +9,11 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npm run build
 
-FROM mcr.microsoft.com/playwright:v1.49.0-noble AS runner
+FROM mcr.microsoft.com/playwright:v1.64.1-noble AS runner
 
 WORKDIR /app
 
-# Instalar Xvfb para evadir Cloudflare con pantalla virtual
+# Instalar Xvfb para pantalla virtual en Docker
 RUN apt-get update && apt-get install -y xvfb && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
@@ -23,11 +23,13 @@ ENV DATA_PATH=/app/data/seen_ids.json
 COPY package*.json ./
 RUN npm ci --omit=dev
 
+# Asegurar que los navegadores requeridos estén instalados
+RUN npx playwright install chromium
+
 COPY --from=builder /app/dist ./dist
 
 RUN mkdir -p /app/data
 
-# Copiar script de arranque con permisos de ejecución
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
