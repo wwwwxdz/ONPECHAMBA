@@ -101,8 +101,12 @@ async function bootstrap() {
     `• \`/status\` : Ver estado general del bot`
   );
 
-  // Primera ejecución inmediata al arrancar
-  await monitor.check();
+  // Primera ejecución inmediata al arrancar protegida con try/catch
+  try {
+    await monitor.check();
+  } catch (err) {
+    console.error('[Bootstrap] Error en la primera verificación:', err);
+  }
 
   const handleShutdown = (signal: string) => {
     console.log(`\n[Main] Recibida señal ${signal}. Cerrando bot...`);

@@ -13,7 +13,7 @@ FROM mcr.microsoft.com/playwright:v1.49.0-noble AS runner
 
 WORKDIR /app
 
-# Instalar Xvfb para tener una pantalla virtual donde Chrome corre con interfaz real y evade Cloudflare
+# Instalar Xvfb para evadir Cloudflare con pantalla virtual
 RUN apt-get update && apt-get install -y xvfb && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
@@ -27,5 +27,8 @@ COPY --from=builder /app/dist ./dist
 
 RUN mkdir -p /app/data
 
-# Ejecutar mediante xvfb-run (Virtual Framebuffer)
-CMD ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1280x720x24", "node", "dist/index.js"]
+# Copiar script de arranque con permisos de ejecución
+COPY docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
+
+CMD ["./docker-entrypoint.sh"]
