@@ -3,12 +3,21 @@ import { IStorageService } from './storage.service.js';
 import { INotifierService } from './notifier.service.js';
 import { ConvocatoriaFilterPayload } from '../types/convocatoria.js';
 
+export interface CheckResult {
+  success: boolean;
+  totalFound: number;
+  newCount: number;
+  message?: string;
+}
+
 export class MonitorService {
   private scraper: IScraperService;
   private storage: IStorageService;
   private notifier: INotifierService;
   private idOdp: number;
   private odpNombre: string;
+  private lastCheckTime: string | null = null;
+  private lastTotalFound: number = 0;
 
   constructor(
     scraper: IScraperService,
@@ -24,8 +33,20 @@ export class MonitorService {
     this.odpNombre = odpNombre;
   }
 
-  public async check(): Promise<void> {
+  public getLastStatus() {
+    return {
+      odpNombre: this.odpNombre,
+      idOdp: this.idOdp,
+      lastCheckTime: this.lastCheckTime,
+      lastTotalFound: this.lastTotalFound,
+      totalSeenHistory: this.storage.getTotalSeen()
+    };
+  }
+
+  public async check(): Promise<CheckResult> {
     const timestamp = new Date().toLocaleString('es-PE', { timeZone: 'America/Lima' });
+    this.lastCheckTime = timestamp;
+
     console.log(`\n========================================`);
     console.log(`[Monitor] Ejecutando verificación: ${timestamp}`);
     console.log(`[Monitor] Monitoreando ODPE: ${this.odpNombre} (ID: ${this.idOdp})`);
@@ -47,10 +68,11 @@ export class MonitorService {
 
     if (!response || !response.success || !response.data?.convocatoriasPage) {
       console.warn('[Monitor] No se pudo obtener una respuesta válida de la ONPE.');
-      return;
+      return { success: false, totalFound: 0, newCount: 0, message: 'Fallo al conectar con ONPE / Cloudflare' };
     }
 
     const rows = response.data.convocatoriasPage.rows || [];
+    this.lastTotalFound = rows.length;
     console.log(`[Monitor] Convocatorias activas encontradas en ${this.odpNombre}: ${rows.length}`);
 
     let newConvocatoriasCount = 0;
@@ -74,5 +96,11 @@ export class MonitorService {
       console.log('[Monitor] No hay convocatorias nuevas en esta ronda.');
     }
     console.log(`========================================\n`);
+
+    return {
+      success: true,
+      totalFound: rows.length,
+      newCount: newConvocatoriasCount
+    };
   }
 }

@@ -5,6 +5,7 @@ export interface IStorageService {
   isAlreadySeen(id: string | number): boolean;
   markAsSeen(id: string | number): void;
   save(): void;
+  getTotalSeen(): number;
 }
 
 export class JsonStorageService implements IStorageService {
@@ -44,6 +45,10 @@ export class JsonStorageService implements IStorageService {
 
   public markAsSeen(id: string | number): void {
     this.seenIds.add(String(id));
+  }
+
+  public getTotalSeen(): number {
+    return this.seenIds.size;
   }
 
   public save(): void {

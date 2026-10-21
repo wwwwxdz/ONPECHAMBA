@@ -8,7 +8,7 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
-      - CRON_SCHEDULE=${CRON_SCHEDULE:-*/30 * * * *}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-* * * * *}
       - ONPE_ID_ODP=${ONPE_ID_ODP:-85}
       - ONPE_ODP_NOMBRE=${ONPE_ODP_NOMBRE:-SANTA}
       - DATA_PATH=/app/data/seen_ids.json

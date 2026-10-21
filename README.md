@@ -29,6 +29,17 @@ Bot automatizado y escalable diseñado para monitorear convocatorias de locació
 
 ---
 
+## 🎮 Comandos Interactivos desde Telegram
+
+El bot ahora escucha tus mensajes en tiempo real. Puedes enviarle estos comandos directamente en el chat:
+
+- `⏱️ /time <minutos>`: Cambia la frecuencia del chequeo dinámicamente sin reiniciar el bot (ejemplo: `/time 1`, `/time 5`, `/time 30`).
+- `🔍 /check`: Obliga al bot a hacer una consulta manual a la ONPE en ese instante y te responde el resultado en el chat.
+- `📊 /status`: Muestra la ODPE vigilada (Santa), el intervalo actual, la última hora de consulta y cuántas vacantes ha visto.
+- `❓ /help`: Muestra la lista de comandos.
+
+---
+
 ### 🧪 Probar la petición en tu máquina local:
 Puedes ejecutar en cualquier momento:
 ```bash
