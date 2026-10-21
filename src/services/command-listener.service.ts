@@ -32,7 +32,7 @@ export class TelegramCommandListenerService {
   public start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
-    console.log('[TelegramCommands] Iniciando escucha de comandos interactivos (/time, /check, /status)...');
+    console.log('[TelegramCommands] Escuchando comandos en tiempo real (/time, /check, /status)...');
     this.pollUpdates();
   }
 
@@ -43,10 +43,13 @@ export class TelegramCommandListenerService {
   private async pollUpdates(): Promise<void> {
     while (this.isRunning) {
       try {
-        const url = `https://api.telegram.org/bot${this.botToken}/getUpdates?offset=${this.lastUpdateId + 1}&timeout=20`;
-        const resp = await fetch(url);
+        const url = `https://api.telegram.org/bot${this.botToken}/getUpdates?offset=${this.lastUpdateId + 1}&timeout=15`;
+        // Usar timeout en el fetch para evitar que se congele el socket de red en Docker
+        const resp = await fetch(url, { signal: AbortSignal.timeout(25000) });
+
         if (!resp.ok) {
-          await new Promise(r => setTimeout(r, 5000));
+          console.warn(`[TelegramCommands] getUpdates HTTP ${resp.status}`);
+          await new Promise(r => setTimeout(r, 3000));
           continue;
         }
 
@@ -66,27 +69,31 @@ export class TelegramCommandListenerService {
           for (const update of data.result) {
             this.lastUpdateId = update.update_id;
             if (update.message && update.message.text) {
-              await this.handleMessage(update.message.chat.id, update.message.text.trim());
+              try {
+                await this.handleMessage(update.message.chat.id, update.message.text.trim());
+              } catch (msgErr) {
+                console.error('[TelegramCommands] Error procesando mensaje:', msgErr);
+              }
             }
           }
         }
       } catch (err) {
-        // En caso de corte de red temporal, esperar 5s
-        await new Promise(r => setTimeout(r, 5000));
+        // En caso de timeout o microcorte, continuar tras pausa breve
+        await new Promise(r => setTimeout(r, 2000));
       }
     }
   }
 
   private async handleMessage(chatId: number, text: string): Promise<void> {
     if (String(chatId) !== this.authorizedChatId) {
-      console.warn(`[TelegramCommands] Intento de acceso no autorizado desde chat ID: ${chatId}`);
+      console.warn(`[TelegramCommands] Intento no autorizado desde chat ID: ${chatId}`);
       return;
     }
 
     const [command, ...args] = text.split(/\s+/);
     const cmd = command.toLowerCase();
 
-    console.log(`[TelegramCommands] Comando recibido: "${text}"`);
+    console.log(`[TelegramCommands] Comando recibido de Telegram: "${text}"`);
 
     switch (cmd) {
       case '/start':
@@ -94,10 +101,10 @@ export class TelegramCommandListenerService {
         await this.notifier.sendSystemMessage(
           `🤖 *Panel de Control de ONPE Bot*\n\n` +
           `Comandos disponibles:\n` +
-          `⏱️ \`/time <minutos>\` - Cambiar frecuencia de consulta (ej. \`/time 1\` o \`/time 30\`).\n` +
-          `🔍 \`/check\` - Forzar una consulta manual inmediata.\n` +
-          `📊 \`/status\` - Ver estado del bot, intervalo actual y última hora de revisión.\n` +
-          `❓ \`/help\` - Mostrar este mensaje de ayuda.`
+          `⏱️ \`/time <minutos>\` - Cambiar frecuencia (ej. \`/time 2\` o \`/time 15\`)\n` +
+          `🔍 \`/check\` - Forzar una consulta manual inmediata\n` +
+          `📊 \`/status\` - Ver estado del bot e historial\n` +
+          `❓ \`/help\` - Ayuda`
         );
         break;
 
@@ -105,7 +112,7 @@ export class TelegramCommandListenerService {
         const minArg = parseInt(args[0], 10);
         if (isNaN(minArg) || minArg < 1 || minArg > 1440) {
           await this.notifier.sendSystemMessage(
-            `⚠️ Por favor especifica un número de minutos válido entre 1 y 1440.\nEjemplo: \`/time 1\` o \`/time 15\``
+            `⚠️ Especifica un número válido entre 1 y 1440 minutos.\nEjemplo: \`/time 2\` o \`/time 20\``
           );
           return;
         }
@@ -113,7 +120,7 @@ export class TelegramCommandListenerService {
         const success = this.scheduler.changeIntervalMinutes(minArg);
         if (success) {
           await this.notifier.sendSystemMessage(
-            `⏱️ *¡Frecuencia actualizada con éxito!*\n\nEl bot ahora consultará la ONPE cada *${minArg} minuto(s)*.`
+            `⏱️ *¡Frecuencia actualizada!*\n\nEl bot ahora consultará la ONPE cada *${minArg} minuto(s)*.`
           );
         } else {
           await this.notifier.sendSystemMessage(`❌ Error al reprogramar el intervalo.`);
@@ -122,17 +129,17 @@ export class TelegramCommandListenerService {
       }
 
       case '/check': {
-        await this.notifier.sendSystemMessage(`⏳ *Iniciando consulta manual en la ONPE...*`);
+        await this.notifier.sendSystemMessage(`⏳ *Iniciando consulta rápida en la ONPE...*`);
         const result = await this.monitor.check();
         if (result.success) {
           await this.notifier.sendSystemMessage(
-            `✅ *Consulta manual finalizada*\n\n` +
+            `✅ *Consulta finalizada*\n\n` +
             `📍 ODPE: *SANTA*\n` +
             `📋 Convocatorias vigentes: *${result.totalFound}*\n` +
             `🚨 Nuevas alertas enviadas: *${result.newCount}*`
           );
         } else {
-          await this.notifier.sendSystemMessage(`❌ Error en la consulta manual: ${result.message}`);
+          await this.notifier.sendSystemMessage(`❌ Error en la consulta: ${result.message}`);
         }
         break;
       }
@@ -145,14 +152,13 @@ export class TelegramCommandListenerService {
           `📍 ODPE vigilada: *${status.odpNombre}* (ID: ${status.idOdp})\n` +
           `⏱️ Intervalo actual: Cada *${interval} minuto(s)*\n` +
           `🕒 Última verificación: *${status.lastCheckTime || 'Aún no ejecutada'}*\n` +
-          `📋 Convocatorias activas en la última ronda: *${status.lastTotalFound}*\n` +
+          `📋 Convocatorias activas última ronda: *${status.lastTotalFound}*\n` +
           `💾 Historial de IDs recordados: *${status.totalSeenHistory}*`
         );
         break;
       }
 
       default:
-        // Mensaje no reconocido
         break;
     }
   }

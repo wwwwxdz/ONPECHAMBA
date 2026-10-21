@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: onpe-alertas-bot
     restart: unless-stopped
+    shm_size: '512m'
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}

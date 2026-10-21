@@ -15,12 +15,14 @@ export class PlaywrightScraperService implements IScraperService {
   public async fetchConvocatorias(filter: ConvocatoriaFilterPayload): Promise<OnpeApiResponse | null> {
     let browser: Browser | null = null;
     try {
-      console.log(`[PlaywrightScraper] Iniciando navegador (headless: ${this.headless})...`);
+      console.log(`[PlaywrightScraper] Iniciando navegador rápido (headless: ${this.headless})...`);
       browser = await chromium.launch({
         headless: this.headless,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage', // Esencial en Docker para evitar que Chrome se congele por falta de memoria compartida
+          '--disable-gpu',
           '--disable-blink-features=AutomationControlled'
         ]
       });
@@ -38,7 +40,7 @@ export class PlaywrightScraperService implements IScraperService {
           const raw = route.request().postData();
           const data = raw ? JSON.parse(raw) : {};
 
-          // Inyectamos el ID de la ODPE deseada (ej. 85 para Santa)
+          // Inyectamos el ID de la ODPE deseada (85 para Santa)
           data.idOdp = filter.idOdp;
           data.pageSize = filter.pageSize || 20;
 
@@ -60,14 +62,17 @@ export class PlaywrightScraperService implements IScraperService {
         }
       });
 
-      console.log('[PlaywrightScraper] Navegando a la página de convocatorias de la ONPE...');
+      console.log('[PlaywrightScraper] Navegando a ONPE (carga rápida)...');
+      // domcontentloaded es mucho más rápido y confiable que networkidle en SPAs
       await page.goto('https://reclutamiento.onpe.gob.pe/convocatorias', {
-        waitUntil: 'networkidle',
-        timeout: 45000
+        waitUntil: 'domcontentloaded',
+        timeout: 25000
       });
 
-      if (!capturedResponse) {
-        await page.waitForTimeout(4000);
+      // Esperar hasta que capturemos la respuesta o máximo 6 segundos
+      const startWait = Date.now();
+      while (!capturedResponse && Date.now() - startWait < 6000) {
+        await page.waitForTimeout(500);
       }
 
       return capturedResponse;
@@ -76,7 +81,7 @@ export class PlaywrightScraperService implements IScraperService {
       return null;
     } finally {
       if (browser) {
-        await browser.close();
+        await browser.close().catch(() => {});
       }
     }
   }
