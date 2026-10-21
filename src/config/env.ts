@@ -17,6 +17,6 @@ export const config: AppConfig = {
   cronSchedule: process.env.CRON_SCHEDULE || '*/30 * * * *', // Cada 30 minutos por defecto
   idOdp: Number(process.env.ONPE_ID_ODP || '85'), // 85 = SANTA
   odpNombre: process.env.ONPE_ODP_NOMBRE || 'SANTA',
-  headless: process.env.PLAYWRIGHT_HEADLESS !== 'false',
+  headless: process.env.PLAYWRIGHT_HEADLESS === 'true',
   dataPath: process.env.DATA_PATH || './data/seen_ids.json'
 };

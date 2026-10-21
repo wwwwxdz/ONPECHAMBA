@@ -29,6 +29,15 @@ Bot automatizado y escalable diseñado para monitorear convocatorias de locació
 
 ---
 
+### 🧪 Probar la petición en tu máquina local:
+Puedes ejecutar en cualquier momento:
+```bash
+npm run test:request
+```
+Esto abrirá el navegador por 3 segundos, consultará la ONPE burlando a Cloudflare, imprimirá el JSON en consola y te mandará un mensaje de confirmación a tu celular.
+
+---
+
 ## 💻 Despliegue en Dokploy
 
 1. Crea una nueva aplicación en tu panel de **Dokploy**:

@@ -8,63 +8,71 @@ export interface IScraperService {
 export class PlaywrightScraperService implements IScraperService {
   private headless: boolean;
 
-  constructor(headless: boolean = true) {
+  constructor(headless: boolean = false) {
     this.headless = headless;
   }
 
   public async fetchConvocatorias(filter: ConvocatoriaFilterPayload): Promise<OnpeApiResponse | null> {
     let browser: Browser | null = null;
     try {
-      console.log('[PlaywrightScraper] Iniciando instancia de navegador para resolver Cloudflare...');
+      console.log(`[PlaywrightScraper] Iniciando navegador (headless: ${this.headless})...`);
       browser = await chromium.launch({
         headless: this.headless,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--disable-gpu'
+          '--disable-blink-features=AutomationControlled'
         ]
       });
 
-      const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      const page: Page = await browser.newPage({
         viewport: { width: 1280, height: 720 },
         locale: 'es-PE'
       });
 
-      const page: Page = await context.newPage();
+      let capturedResponse: OnpeApiResponse | null = null;
 
-      console.log('[PlaywrightScraper] Navegando a la página de convocatorias...');
+      // Interceptar la petición de convocatorias que realiza el portal
+      await page.route('**/sigloc-backend/v1/api/convocatoria/lista', async (route) => {
+        try {
+          const raw = route.request().postData();
+          const data = raw ? JSON.parse(raw) : {};
+
+          // Inyectamos el ID de la ODPE deseada (ej. 85 para Santa)
+          data.idOdp = filter.idOdp;
+          data.pageSize = filter.pageSize || 20;
+
+          await route.continue({
+            postData: JSON.stringify(data)
+          });
+        } catch {
+          await route.continue();
+        }
+      });
+
+      page.on('response', async (resp) => {
+        if (resp.url().includes('convocatoria/lista')) {
+          try {
+            capturedResponse = await resp.json();
+          } catch {
+            // Ignorar respuestas que no sean JSON
+          }
+        }
+      });
+
+      console.log('[PlaywrightScraper] Navegando a la página de convocatorias de la ONPE...');
       await page.goto('https://reclutamiento.onpe.gob.pe/convocatorias', {
         waitUntil: 'networkidle',
         timeout: 45000
       });
 
-      // Breve pausa para asegurar que Cloudflare haya emitido cf_clearance
-      await page.waitForTimeout(3000);
+      if (!capturedResponse) {
+        await page.waitForTimeout(4000);
+      }
 
-      console.log(`[PlaywrightScraper] Consultando API interna de ONPE (idOdp: ${filter.idOdp})...`);
-      const apiResult: OnpeApiResponse = await page.evaluate(async (payload) => {
-        const response = await fetch('/sigloc-backend/v1/api/convocatoria/lista', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json, text/plain, */*'
-          },
-          body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        return await response.json();
-      }, filter);
-
-      return apiResult;
+      return capturedResponse;
     } catch (error) {
-      console.error('[PlaywrightScraper] Error durante el scraping/fetch:', error);
+      console.error('[PlaywrightScraper] Error durante el scraping:', error);
       return null;
     } finally {
       if (browser) {
